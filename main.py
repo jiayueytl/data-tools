@@ -172,6 +172,10 @@ def comparison_viewer():
     messages_data = entry.get("messages", {})
     revised = entry.get("revised_messages", {})
 
+    st.markdown(f"**ID:** {entry.get('original_id', entry.get('id','N/A'))}")
+    st.markdown(f"**Tag1:** {entry.get('tag1','')}")
+    st.markdown(f"**Tag2:** {entry.get('tag2','')}")
+
     chat_messages = messages_data.get("Messages", [])
     reasoning = messages_data.get("Reasoning", "No reasoning found")
 
@@ -189,6 +193,7 @@ def comparison_viewer():
         revised_reasoning = "No revised reasoning"
 
     # Render
+    st.write()
     render_chat_history(chat_messages)
     render_comparison(chat_messages, reasoning, revised_content, revised_reasoning)
 
