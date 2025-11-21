@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import pandas as pd
 
-st.set_page_config(page_title="JSONL App", layout="wide")
+st.set_page_config(page_title="DNA Data Tools", layout="wide")
 
 # --- Page Navigation ---
 page = st.sidebar.selectbox("Select Page", ["JSONL Viewer", "Comparison Viewer"])
