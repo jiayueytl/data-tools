@@ -1,227 +1,206 @@
 import streamlit as st
 import json
-import pandas as pd
 
 st.set_page_config(page_title="DNA Data Tools", layout="wide")
 
-# --- Page Navigation ---
-page = st.sidebar.selectbox("Select Page", ["JSONL Viewer", "Comparison Viewer"])
+# ------------------------
+# Helper Functions
+# ------------------------
 
-# --- JSONL Viewer Page ---
-if page == "JSONL Viewer":
-    st.title("📄 JSONL Viewer (Single Entry Navigation)")
-
-    # --- 1. Upload JSONL file ---
-    uploaded_file = st.file_uploader("Upload a .jsonl file", type=["jsonl"])
-
-    if uploaded_file is not None:
-        st.success("File uploaded successfully!")
-
-        # --- 2. Parse JSONL ---
+def load_json_or_jsonl(uploaded_file):
+    """Load JSON or JSONL file and return list or dict"""
+    try:
+        data = json.load(uploaded_file)
+        return data
+    except Exception:
+        # Try line by line as JSONL
+        uploaded_file.seek(0)
         data_list = []
         for line in uploaded_file:
             try:
-                obj = json.loads(line.decode('utf-8'))
+                obj = json.loads(line.decode("utf-8"))
                 data_list.append(obj)
             except Exception as e:
                 st.error(f"Error parsing line: {e}")
+        return data_list
 
-        st.info(f"Total entries loaded: {len(data_list)}")
+def wrap_text(text):
+    """Wrap text for Streamlit markdown"""
+    return f"<div style='white-space: pre-wrap; word-wrap: break-word; padding:8px; border:1px solid #ddd; border-radius:5px; background-color:#f9f9f9'>{text}</div>"
 
-        if data_list:
+def render_chat_history(chat_messages):
+    """Render user-assistant chat pairs"""
+    st.subheader("💬 Chat History")
+    if chat_messages:
+        for msg in chat_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            color = "#f0f8ff" if role.lower() == "user" else "#e6ffe6"
+            st.markdown(f"<div style='background-color:{color}; padding:8px; border-radius:5px; margin-bottom:4px'><b>{role.title()}:</b> {content}</div>", unsafe_allow_html=True)
+    else:
+        st.info("No chat messages found.")
 
-            # ----------------------------------------------------
-            # 🔍 TAG FILTERS
-            # ----------------------------------------------------
-            all_tag1 = sorted(list({d.get("tag1") for d in data_list if "tag1" in d}))
-            all_tag2 = sorted(list({d.get("tag2") for d in data_list if "tag2" in d}))
+def render_comparison(chat_messages, reasoning, revised_content, revised_reasoning):
+    """Render bottom comparison in 2x2 layout with text wrapping"""
+    st.subheader("📝 Original vs Revised")
+    
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
+        st.markdown("**Original Content**")
+        last_content = chat_messages[-1].get("content", "No content found") if chat_messages else "No content found"
+        st.markdown(wrap_text(last_content), unsafe_allow_html=True)
 
-            colf1, colf2 = st.columns(2)
+    with row1_col2:
+        st.markdown("**Revised Content**")
+        st.markdown(wrap_text(revised_content), unsafe_allow_html=True)
 
-            with colf1:
-                selected_tag1 = st.selectbox(
-                    "Filter Tag1",
-                    ["All"] + all_tag1 if all_tag1 else ["No tag1 in file"]
-                )
+    st.markdown("---")
+    
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
+        st.markdown("**Original Reasoning**")
+        st.markdown(wrap_text(reasoning), unsafe_allow_html=True)
 
-            with colf2:
-                selected_tag2 = st.selectbox(
-                    "Filter Tag2",
-                    ["All"] + all_tag2 if all_tag2 else ["No tag2 in file"]
-                )
+    with row2_col2:
+        st.markdown("**Revised Reasoning**")
+        st.markdown(wrap_text(revised_reasoning), unsafe_allow_html=True)
 
-            # Apply filter
-            filtered = data_list
-            if selected_tag1 != "All" and "No tag1" not in selected_tag1:
-                filtered = [d for d in filtered if d.get("tag1") == selected_tag1]
+def navigate_entries(filtered, index_key="index", prefix="nav"):
+    """Create <- and -> navigation buttons with unique keys"""
+    if index_key not in st.session_state:
+        st.session_state[index_key] = 0
 
-            if selected_tag2 != "All" and "No tag2" not in selected_tag2:
-                filtered = [d for d in filtered if d.get("tag2") == selected_tag2]
+    col_prev, col_index, col_next = st.columns([1, 2, 1])
+    with col_prev:
+        if st.button("⬅️ Previous", key=f"{prefix}_prev"):
+            if st.session_state[index_key] > 0:
+                st.session_state[index_key] -= 1
+    with col_index:
+        st.markdown(f"**Entry {st.session_state[index_key]+1} / {len(filtered)}**", unsafe_allow_html=True)
+    with col_next:
+        if st.button("Next ➡️", key=f"{prefix}_next"):
+            if st.session_state[index_key] < len(filtered) - 1:
+                st.session_state[index_key] += 1
 
-            # Handle empty filtered results
-            if not filtered:
-                st.warning("No entries match your filter.")
-                st.stop()
+    return st.session_state[index_key]
 
-            # Navigation state
-            if "index" not in st.session_state:
-                st.session_state.index = 0
+# ------------------------
+# JSONL Viewer Page
+# ------------------------
+def jsonl_viewer():
+    st.title("📄 JSONL Viewer")
+    uploaded_file = st.file_uploader("Upload a .jsonl file", type=["jsonl"], key="jsonl_viewer")
+    if uploaded_file is None:
+        st.info("Upload a JSONL file to start viewing entries.")
+        return
 
-            # Fix index overflow after filtering
-            if st.session_state.index >= len(filtered):
-                st.session_state.index = 0
+    data_list = load_json_or_jsonl(uploaded_file)
+    if not data_list:
+        st.warning("No entries loaded from file.")
+        return
 
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col1:
-                if st.button("⬅️ Previous") and st.session_state.index > 0:
-                    st.session_state.index -= 1
-            with col3:
-                if st.button("Next ➡️") and st.session_state.index < len(filtered) - 1:
-                    st.session_state.index += 1
+    # Filter by tags
+    all_tag1 = sorted({d.get("tag1") for d in data_list if "tag1" in d})
+    all_tag2 = sorted({d.get("tag2") for d in data_list if "tag2" in d})
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_tag1 = st.selectbox("Filter Tag1", ["All"] + all_tag1 if all_tag1 else ["No tag1 in file"])
+    with col2:
+        selected_tag2 = st.selectbox("Filter Tag2", ["All"] + all_tag2 if all_tag2 else ["No tag2 in file"])
 
-            # Jump dropdown
-            options = [
-                f"Entry {i} | ID: {entry.get('original_id', entry.get('id', 'N/A'))}"
-                for i, entry in enumerate(filtered)
-            ]
-            selected_option = st.selectbox(
-                "Jump to entry",
-                options,
-                index=st.session_state.index
-            )
-            st.session_state.index = int(selected_option.split(" ")[1])
-            entry = filtered[st.session_state.index]
+    filtered = data_list
+    if selected_tag1 != "All":
+        filtered = [d for d in filtered if d.get("tag1") == selected_tag1]
+    if selected_tag2 != "All":
+        filtered = [d for d in filtered if d.get("tag2") == selected_tag2]
 
-            st.markdown("---")
-            st.subheader(f"Entry {st.session_state.index} | ID: {entry.get('original_id','N/A')}")
+    if not filtered:
+        st.warning("No entries match your filter.")
+        return
 
-            # Tags
-            st.markdown(f"**Tag1:** {entry.get('tag1','')}")
-            st.markdown(f"**Tag2:** {entry.get('tag2','')}")
+    # --- Top Navigation ---
+    current_index = navigate_entries(filtered, index_key="jsonl_index", prefix="jsonl_top")
 
-            # Messages or prompt
-            if "messages" in entry:
-                messages = entry.get("messages", {}).get("Messages", [])
-                if messages:
-                    st.markdown("**Messages:**")
-                    for msg in messages:
-                        role = msg.get("role", "")
-                        content = msg.get("content", "")
-                        st.markdown(f"- **{role}:** {content}")
+    entry = filtered[current_index]
 
-                reasoning = entry.get("messages", {}).get("Reasoning", "")
-                if reasoning:
-                    st.markdown("**Reasoning / Analysis:**")
-                    st.markdown(reasoning)
+    st.markdown(f"**ID:** {entry.get('original_id', entry.get('id','N/A'))}")
+    st.markdown(f"**Tag1:** {entry.get('tag1','')}")
+    st.markdown(f"**Tag2:** {entry.get('tag2','')}")
 
-            elif "prompt" in entry:
-                prompts = entry.get("prompt", [])
-                if prompts:
-                    st.markdown("**Prompts:**")
-                    for i, p in enumerate(prompts):
-                        role = p.get("role", "")
-                        content = p.get("content", "")
-                        st.markdown(f"- **{role}:** {content}")
+    # Messages / Prompts
+    if "messages" in entry:
+        messages = entry.get("messages", {}).get("Messages", [])
+        reasoning = entry.get("messages", {}).get("Reasoning", "")
+    elif "prompt" in entry:
+        messages = entry.get("prompt", [])
+        reasoning = ""
+    else:
+        messages = []
+        reasoning = ""
 
-            # Raw JSON
-            with st.expander("Raw JSON"):
-                st.code(json.dumps(entry, ensure_ascii=False, indent=2))
+    if messages:
+        render_chat_history(messages)
+    if reasoning:
+        st.markdown("**Reasoning / Analysis:**")
+        st.markdown(wrap_text(reasoning), unsafe_allow_html=True)
 
-# --- Comparison Viewer Page ---
-elif page == "Comparison Viewer":
-    # st.set_page_config(page_title="JSON Comparison Viewer", layout="wide")
+    # Raw JSON
+    with st.expander("Raw JSON"):
+        st.code(json.dumps(entry, ensure_ascii=False, indent=2))
+
+    # --- Bottom Navigation ---
+    st.markdown("---")
+    navigate_entries(filtered, index_key="jsonl_index", prefix="jsonl_bottom")
+
+# ------------------------
+# Comparison Viewer Page
+# ------------------------
+def comparison_viewer():
     st.title("🔍 JSON Comparison Viewer")
+    uploaded_file = st.file_uploader("Upload a JSON file or JSONL", type=["json","jsonl"], key="comparison_viewer")
+    if uploaded_file is None:
+        st.info("Upload a JSON/JSONL file to view comparison.")
+        return
 
-    # Upload JSON file (single entry or list)
-    uploaded_file = st.file_uploader("Upload a JSON file or JSONL", type=["json", "jsonl"], key="comparison")
+    data = load_json_or_jsonl(uploaded_file)
+    data_list = data if isinstance(data, list) else [data]
 
-    if uploaded_file is not None:
-        try:
-            data = json.load(uploaded_file)
-        except Exception as e:
-            st.error(f"Error loading JSON: {e}")
-            st.stop()
+    # --- Top Navigation ---
+    current_index = navigate_entries(data_list, index_key="comparison_index", prefix="comp_top")
+    entry = data_list[current_index]
 
-        # If it's a list, let user pick an entry
-        if isinstance(data, list):
-            selected_index = st.number_input(
-                "Select entry index",
-                min_value=0,
-                max_value=len(data) - 1,
-                value=0,
-                step=1
-            )
-            entry = data[selected_index]
-        elif isinstance(data, dict):
-            entry = data
-        else:
-            st.error("Unsupported JSON structure")
-            st.stop()
+    messages_data = entry.get("messages", {})
+    revised = entry.get("revised_messages", {})
 
-        # --- Extract messages and revised ---
-        messages_data = entry.get("messages", {})
-        revised = entry.get("revised_messages", {})
+    chat_messages = messages_data.get("Messages", [])
+    reasoning = messages_data.get("Reasoning", "No reasoning found")
 
-        chat_messages = messages_data.get("Messages", [])
-        reasoning = messages_data.get("Reasoning", "No reasoning found")
+    # Revised content
+    revised_content_list = revised.get("revised_response", [])
+    if revised_content_list:
+        first_item = revised_content_list[0]
+        revised_content = first_item.get("content") if isinstance(first_item, dict) else first_item
+    else:
+        revised_content = "No revised content"
 
-        # Revised content
-        revised_content_list = revised.get("revised_response", [])
-        if revised_content_list:
-            first_item = revised_content_list[0]
-            if isinstance(first_item, dict):
-                revised_content = first_item.get("content", "No revised content")
-            elif isinstance(first_item, str):
-                revised_content = first_item
-        else:
-            revised_content = "No revised content"
+    # Revised reasoning
+    revised_reasoning = revised.get("revised_reasoning", "No revised reasoning")
+    if revised_reasoning in ["", "N/A", None]:
+        revised_reasoning = "No revised reasoning"
 
-        # Revised reasoning
-        revised_reasoning = revised.get("revised_reasoning", "No revised reasoning")
-        if revised_reasoning in ["", "N/A", None]:
-            revised_reasoning = "No revised reasoning"
+    # Render
+    render_chat_history(chat_messages)
+    render_comparison(chat_messages, reasoning, revised_content, revised_reasoning)
 
-        # --- Top: Chat history ---
-        st.subheader("💬 Chat History")
-        if chat_messages:
-            for msg in chat_messages:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role.lower() == "user":
-                    st.markdown(f"<div style='background-color:#f0f8ff; padding:8px; border-radius:5px;'><b>User:</b> {content}</div>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<div style='background-color:#e6ffe6; padding:8px; border-radius:5px;'><b>Assistant:</b> {content}</div>", unsafe_allow_html=True)
-        else:
-            st.info("No chat messages found.")
+    # --- Bottom Navigation ---
+    st.markdown("---")
+    navigate_entries(data_list, index_key="comparison_index", prefix="comp_bottom")
 
-        st.markdown("---")
-
-        # --- Bottom: Content and Reasoning Comparison ---
-        st.subheader("📝 Original vs Revised")
-
-        def wrap_text(text):
-            return f"<div style='white-space: pre-wrap; word-wrap: break-word; padding:8px; border:1px solid #ddd; border-radius:5px; background-color:#f9f9f9'>{text}</div>"
-
-        # Row 1: Original content | Original reasoning
-        row1_col1, row1_col2 = st.columns(2)
-        with row1_col1:
-            st.markdown("**Original Content**")
-            last_user_assistant = chat_messages[-1] if chat_messages else {}
-            last_content = last_user_assistant.get("content", "No content found")
-            st.markdown(wrap_text(last_content), unsafe_allow_html=True)
-
-        st.markdown("---")
-        with row1_col2:
-            st.markdown("**Revised Content**")
-            st.markdown(wrap_text(revised_content), unsafe_allow_html=True)
-
-        # Row 2: Revised content | Revised reasoning
-        row2_col1, row2_col2 = st.columns(2)
-        with row2_col1:
-            st.markdown("**Original Reasoning**")
-            st.markdown(wrap_text(reasoning), unsafe_allow_html=True)
-
-        with row2_col2:
-            st.markdown("**Revised Reasoning**")
-            st.markdown(wrap_text(revised_reasoning), unsafe_allow_html=True)
-
+# ------------------------
+# Main Navigation
+# ------------------------
+page = st.sidebar.selectbox("Select Page", ["JSONL Viewer", "Comparison Viewer"])
+if page == "JSONL Viewer":
+    jsonl_viewer()
+elif page == "Comparison Viewer":
+    comparison_viewer()
